@@ -1,0 +1,34 @@
+{
+  "tests": [
+    {
+      "name": "TestInitialElection2A",
+      "setup": "",
+      "run": "make TestInitialElection2A",
+      "input": "",
+      "output": "",
+      "comparison": "included",
+      "timeout": 2,
+      "points": null
+    },
+    {
+      "name": "TestReElection2A",
+      "setup": "",
+      "run": "make TestReElection2A",
+      "input": "",
+      "output": "",
+      "comparison": "included",
+      "timeout": 2,
+      "points": null
+    },
+    {
+      "name": "TestReElection2B",
+      "setup": "",
+      "run": "make TestReElection2B",
+      "input": "",
+      "output": "",
+      "comparison": "included",
+      "timeout": 2,
+      "points": null
+    }
+  ]
+}

@@ -225,11 +225,28 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	return ok
 }
 
+// sentQuest go routine
+func sentQuest(rf *Raft, peerID int, args *RequestVoteArgs, voteCh chan *VoteResponses) {
+	// the node is self
+	if peerID == rf.me {
+		return
+	}
+	requestReply := RequestVoteReply{}
+	success := rf.sendRequestVote(peerID, args, &requestReply)
+	if success {
+		voteCh <- &VoteResponses{id: peerID, reply: &requestReply}
+	} else {
+		voteCh <- &VoteResponses{id: peerID, reply: nil}
+	}
+}
+
 // Election
 func (rf *Raft) elect() {
 	// if rf is not killed
 	for !rf.killed() {
+		// Refresh every 1 ms
 		time.Sleep(1 * time.Millisecond)
+
 		func() {
 			rf.mu.Lock()
 			defer rf.mu.Unlock()
@@ -259,23 +276,14 @@ func (rf *Raft) elect() {
 				requestArgs.Term = rf.currentTerm
 
 				rf.mu.Unlock()
+
+				// Number of peers
 				nPeers := len(rf.peers)
+				// Channel for voting
 				voteCh := make(chan *VoteResponses, nPeers)
 				// Send requests
 				for i := 0; i < nPeers; i++ {
-					go func(peerID int, args *RequestVoteArgs) {
-						// the node is self
-						if peerID == rf.me {
-							return
-						}
-						requestReply := RequestVoteReply{}
-						success := rf.sendRequestVote(peerID, args, &requestReply)
-						if success {
-							voteCh <- &VoteResponses{id: peerID, reply: &requestReply}
-						} else {
-							voteCh <- &VoteResponses{id: peerID, reply: nil}
-						}
-					}(i, &requestArgs)
+					go sentQuest(rf, i, &requestArgs, voteCh)
 				}
 
 				// Check the channel until voting is finished
@@ -285,18 +293,18 @@ func (rf *Raft) elect() {
 				for {
 					select {
 					case vote := <-voteCh:
-						nFinished++
 						voteReply := vote.reply
 						if voteReply != nil {
-							// The peer vote for me
-							if voteReply.VoteGranted {
-								nVoteMe++
-							}
 							// Update largest term
 							if voteReply.Term > largestTerm {
 								largestTerm = voteReply.Term
 							}
+							// The peer vote for me
+							if voteReply.VoteGranted {
+								nVoteMe++
+							}
 						}
+						nFinished++
 						// Finish the voting when all nodes has voted
 						if nFinished == len(rf.peers) || nVoteMe > nPeers/2 {
 							goto JUMPPOINT
@@ -305,13 +313,13 @@ func (rf *Raft) elect() {
 				}
 			JUMPPOINT:
 				rf.mu.Lock()
-				// Check the state
-				if rf.state != "candidate" {
-					return
-				}
 				// Check the term
 				if rf.currentTerm < largestTerm {
 					checkTerm(rf, largestTerm)
+					return
+				}
+				// Check the state
+				if rf.state != "candidate" {
 					return
 				}
 				// Win the voting
@@ -374,11 +382,25 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 	return ok
 }
 
+// sendHeartbeat go routine
+func sendHeartbeat(rf *Raft, peerID int, args *AppendEntriesArgs) {
+	heartbeatReply := AppendEntriesReply{}
+	success := rf.sendAppendEntries(peerID, args, &heartbeatReply)
+	if success {
+		// Check term of the reply
+		rf.mu.Lock()
+		defer rf.mu.Unlock()
+		checkTerm(rf, heartbeatReply.Term)
+	}
+}
+
 // Heartbeat
 func (rf *Raft) heartbeat() {
 	// if rf is not killed
 	for !rf.killed() {
+		// Refresh every 1 ms
 		time.Sleep(1 * time.Millisecond)
+
 		func() {
 			rf.mu.Lock()
 			defer rf.mu.Unlock()
@@ -402,20 +424,13 @@ func (rf *Raft) heartbeat() {
 				if i == rf.me {
 					continue
 				}
+
 				heartbeatArgs := AppendEntriesArgs{}
 				heartbeatArgs.LeaderID = rf.me
 				heartbeatArgs.Term = rf.currentTerm
+
 				// send heartbeat goroutine
-				go func(peerID int, args *AppendEntriesArgs) {
-					heartbeatReply := AppendEntriesReply{}
-					success := rf.sendAppendEntries(peerID, args, &heartbeatReply)
-					if success {
-						// Check term of the reply
-						rf.mu.Lock()
-						defer rf.mu.Unlock()
-						checkTerm(rf, heartbeatReply.Term)
-					}
-				}(i, &heartbeatArgs)
+				go sendHeartbeat(rf, i, &heartbeatArgs)
 			}
 		}()
 	}

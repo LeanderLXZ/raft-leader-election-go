@@ -346,12 +346,6 @@ type AppendEntriesReply struct {
 	Term int
 }
 
-// HeartbeatResponses RPC arguments structure.
-type HeartbeatResponses struct {
-	id    int
-	reply *AppendEntriesReply
-}
-
 // AppendEntries will be sent from leader
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 

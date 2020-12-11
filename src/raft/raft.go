@@ -15,8 +15,10 @@ package raft
 //   this function will be called via RPC on the other Raft nodes during the election
 
 import (
+	"math/rand"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"../labrpc"
 )
@@ -54,15 +56,27 @@ type Raft struct {
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 
+	// candidate, follower, or leader
+	state         string
+	leaderID      int
+	activeTime    time.Time
+	heartbeatTime time.Time
+
+	// Persistent state on all servers
+	currentTerm int
+	votedFor    int
 }
 
 // GetState returns currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
-
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	var term int
 	var isleader bool
 	// Your code here (2A).
+	term = rf.currentTerm
+	isleader = rf.state == "leader"
 	return term, isleader
 }
 
@@ -108,6 +122,10 @@ func (rf *Raft) readPersist(data []byte) {
 // field names must start with capital letters!
 type RequestVoteArgs struct {
 	// Your data here (2A, 2B).
+	// candidate's term
+	Term int
+	// candidate requesting vote
+	CandidateID int
 }
 
 //
@@ -116,12 +134,61 @@ type RequestVoteArgs struct {
 //
 type RequestVoteReply struct {
 	// Your data here (2A).
+	// currentTerm, for candidate to update itself
+	Term int
+	//true means candidate received vote
+	VoteGranted bool
+}
+
+// VoteResponses RPC arguments structure.
+type VoteResponses struct {
+	id    int
+	reply *RequestVoteReply
+}
+
+func checkTerm(rf *Raft, term int) {
+	if rf.currentTerm < term {
+		// update state
+		rf.state = "follower"
+		// update leaderID
+		rf.leaderID = -1
+		// update vote
+		rf.votedFor = -1
+		// update term
+		rf.currentTerm = term
+	}
 }
 
 // RequestVote is the RPC handler which will be executed by a node
 // when it gets a request for a vote
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	// Set to false until the leader is selected
+	reply.VoteGranted = false
+	// Reply the term of current node
+	reply.Term = rf.currentTerm
+
+	// 1. Reply false if term < currentTerm (§5.1)
+	if rf.currentTerm > args.Term {
+		return
+	}
+
+	// 2. Covert to follower if term > currentTerm
+	checkTerm(rf, args.Term)
+
+	// Voting
+	// If votedFor is null or candidateId, grant vote (§5.2, §5.4)
+	if rf.votedFor == -1 || rf.votedFor == args.CandidateID {
+		// Vote for candidate
+		rf.votedFor = args.CandidateID
+		// update granted status
+		reply.VoteGranted = true
+		// update activate time
+		rf.activeTime = time.Now()
+	}
 }
 
 //
@@ -156,6 +223,201 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
 	return ok
+}
+
+// Election
+func (rf *Raft) elect() {
+	// if rf is not killed
+	for !rf.killed() {
+		time.Sleep(1 * time.Millisecond)
+		func() {
+			rf.mu.Lock()
+			defer rf.mu.Unlock()
+
+			// If time out, convert to candidate
+			timeNow := time.Now()
+			// Make sure the election timeouts in different peers don’t always
+			// fire at the same time, or else all peers will vote only for
+			// themselves and no one will become the leader.
+			timeout := time.Duration(200+rand.Int31n(300)) * time.Millisecond
+			if rf.state == "follower" && timeNow.Sub(rf.activeTime) >= timeout {
+				rf.state = "candidate"
+			}
+
+			// request votes
+			if rf.state == "candidate" && timeNow.Sub(rf.activeTime) >= timeout {
+
+				// Vote for self and update states
+				rf.votedFor = rf.me
+				rf.currentTerm++
+				rf.activeTime = timeNow
+
+				// Send vote request to peers
+				requestArgs := RequestVoteArgs{}
+				requestArgs.CandidateID = rf.me
+				requestArgs.Term = rf.currentTerm
+
+				rf.mu.Unlock()
+				nPeers := len(rf.peers)
+				voteCh := make(chan *VoteResponses, nPeers)
+				// Send requests
+				for i := 0; i < nPeers; i++ {
+					go func(peerID int, args *RequestVoteArgs) {
+						// the node is self
+						if peerID == rf.me {
+							return
+						}
+						requestReply := RequestVoteReply{}
+						success := rf.sendRequestVote(peerID, args, &requestReply)
+						if success {
+							voteCh <- &VoteResponses{id: peerID, reply: &requestReply}
+						} else {
+							voteCh <- &VoteResponses{id: peerID, reply: nil}
+						}
+					}(i, &requestArgs)
+				}
+
+				// Check the channel until voting is finished
+				nVoteMe := 1
+				nFinished := 1
+				largestTerm := -1
+				for {
+					select {
+					case vote := <-voteCh:
+						nFinished++
+						voteReply := vote.reply
+						if voteReply != nil {
+							// The peer vote for me
+							if voteReply.VoteGranted {
+								nVoteMe++
+							}
+							// Update largest term
+							if voteReply.Term > largestTerm {
+								largestTerm = voteReply.Term
+							}
+						}
+						// Finish the voting when all nodes has voted
+						if nFinished == len(rf.peers) || nVoteMe > nPeers/2 {
+							goto JUMPPOINT
+						}
+					}
+				}
+			JUMPPOINT:
+				rf.mu.Lock()
+				// Check the state
+				if rf.state != "candidate" {
+					return
+				}
+				// Check the term
+				if rf.currentTerm < largestTerm {
+					checkTerm(rf, largestTerm)
+					return
+				}
+				// Win the voting
+				if nVoteMe > nPeers/2 {
+					rf.state = "leader"
+					rf.leaderID = rf.me
+					rf.heartbeatTime = time.Unix(0, 0)
+					return
+				}
+			}
+		}()
+	}
+}
+
+// AppendEntriesArgs RPC arguments structure.
+type AppendEntriesArgs struct {
+	Term         int
+	LeaderID     int
+	LeaderCommit int
+}
+
+// AppendEntriesReply RPC arguments structure.
+type AppendEntriesReply struct {
+	Term int
+}
+
+// HeartbeatResponses RPC arguments structure.
+type HeartbeatResponses struct {
+	id    int
+	reply *AppendEntriesReply
+}
+
+// AppendEntries will be sent from leader
+func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	// Reply the term of current node
+	reply.Term = rf.currentTerm
+
+	// 1. Reply false if term < currentTerm (§5.1)
+	if rf.currentTerm > args.Term {
+		return
+	}
+
+	// 2. Covert to follower if term > currentTerm
+	checkTerm(rf, args.Term)
+
+	// Append new leader
+	rf.leaderID = args.LeaderID
+
+	// Update active time
+	rf.activeTime = time.Now()
+}
+
+// Send heartbeat to other nodes
+func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
+	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+	return ok
+}
+
+// Heartbeat
+func (rf *Raft) heartbeat() {
+	// if rf is not killed
+	for !rf.killed() {
+		time.Sleep(1 * time.Millisecond)
+		func() {
+			rf.mu.Lock()
+			defer rf.mu.Unlock()
+
+			// Check if I am the leader
+			if rf.state != "leader" {
+				return
+			}
+
+			// Send heart beat for every 100ms
+			timeNow := time.Now()
+			if timeNow.Sub(rf.heartbeatTime) < 100*time.Millisecond {
+				return
+			}
+			rf.heartbeatTime = time.Now()
+
+			// Send heartbeat
+			nPeers := len(rf.peers)
+			for i := 0; i < nPeers; i++ {
+				// If the peer is me
+				if i == rf.me {
+					continue
+				}
+				heartbeatArgs := AppendEntriesArgs{}
+				heartbeatArgs.LeaderID = rf.me
+				heartbeatArgs.Term = rf.currentTerm
+				// send heartbeat goroutine
+				go func(peerID int, args *AppendEntriesArgs) {
+					heartbeatReply := AppendEntriesReply{}
+					success := rf.sendAppendEntries(peerID, args, &heartbeatReply)
+					if success {
+						// Check term of the reply
+						rf.mu.Lock()
+						defer rf.mu.Unlock()
+						checkTerm(rf, heartbeatReply.Term)
+					}
+				}(i, &heartbeatArgs)
+			}
+		}()
+	}
 }
 
 // Start the consensus process to add a new entry to the log.
@@ -222,9 +484,19 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 
 	// Your initialization code here (2A, 2B, 2C).
+	rf.state = "follower"
+	rf.leaderID = -1
+	rf.votedFor = -1
+	rf.activeTime = time.Now()
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
+
+	// go routine for election
+	go rf.elect()
+
+	// go routine for heartbeat
+	go rf.heartbeat()
 
 	return rf
 }

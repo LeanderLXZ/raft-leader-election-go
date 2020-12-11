@@ -239,7 +239,8 @@ func (rf *Raft) elect() {
 			// Make sure the election timeouts in different peers don’t always
 			// fire at the same time, or else all peers will vote only for
 			// themselves and no one will become the leader.
-			timeout := time.Duration(200+rand.Int31n(300)) * time.Millisecond
+			timeoutMillisecond := 150 + rand.Int31n(150)
+			timeout := time.Duration(timeoutMillisecond) * time.Millisecond
 			if rf.state == "follower" && timeNow.Sub(rf.activeTime) >= timeout {
 				rf.state = "candidate"
 			}

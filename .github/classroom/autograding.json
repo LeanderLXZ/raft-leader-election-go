@@ -1,34 +1,54 @@
 {
   "tests": [
     {
-      "name": "TestInitialElection2A",
+      "name": "TestInitialElection",
       "setup": "",
-      "run": "make TestInitialElection2A",
+      "run": "make TestInitialElection",
       "input": "",
       "output": "",
       "comparison": "included",
       "timeout": 2,
-      "points": 8
+      "points": 4
     },
     {
-      "name": "TestReElection2A",
+      "name": "TestPreviousLeaderRejoin",
       "setup": "",
-      "run": "make TestReElection2A",
+      "run": "make TestPreviousLeaderRejoin",
       "input": "",
       "output": "",
       "comparison": "included",
       "timeout": 2,
-      "points": 6
+      "points": 4
     },
     {
-      "name": "TestReElection2B",
+      "name": "TestReElectionFail",
       "setup": "",
-      "run": "make TestReElection2B",
+      "run": "make TestReElectionFail",
       "input": "",
       "output": "",
       "comparison": "included",
       "timeout": 2,
-      "points": 6
+      "points": 4
+    },
+    {
+      "name": "TestReElectionSuccess",
+      "setup": "",
+      "run": "make TestReElectionSuccess",
+      "input": "",
+      "output": "",
+      "comparison": "included",
+      "timeout": 3,
+      "points": 4
+    },
+    {
+      "name": "TestReElectionSuccess2",
+      "setup": "",
+      "run": "make TestReElectionSuccess2",
+      "input": "",
+      "output": "",
+      "comparison": "included",
+      "timeout": 2,
+      "points": 4
     }
   ]
 }

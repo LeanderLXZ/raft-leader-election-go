@@ -8,7 +8,7 @@
       "output": "",
       "comparison": "included",
       "timeout": 2,
-      "points": null
+      "points": 8
     },
     {
       "name": "TestReElection2A",
@@ -18,7 +18,7 @@
       "output": "",
       "comparison": "included",
       "timeout": 2,
-      "points": null
+      "points": 6
     },
     {
       "name": "TestReElection2B",
@@ -28,7 +28,7 @@
       "output": "",
       "comparison": "included",
       "timeout": 2,
-      "points": null
+      "points": 6
     }
   ]
 }

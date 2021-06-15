@@ -1,3 +1,3 @@
-Raft Leader Election
+# Raft Leader Election
 ***
-## An election system based on the Raft Consensus Algorithm.
+### An election system based on the Raft Consensus Algorithm.
